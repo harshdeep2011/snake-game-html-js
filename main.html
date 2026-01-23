@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Snake — Harshdeep's Game</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1724;
+      --accent:#28c76f;
+      --muted:#9aa6b2;
+      --text:#e6eef6;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,system-ui,-apple-system,"Helvetica Neue",Arial;}
+    body{
+      background:linear-gradient(180deg,#071024,#0b1220);
+      color:var(--text);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+    }
+    .container{
+      width:100%;
+      max-width:760px;
+      background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      border-radius:12px;
+      padding:18px;
+      box-shadow: 0 10px 30px rgba(2,6,23,0.7);
+      text-align:center;
+    }
+    h1{margin:6px 0 12px;font-weight:600}
+    canvas{
+      display:block;
+      margin:0 auto;
+      background:var(--panel);
+      border-radius:8px;
+      box-shadow: 0 6px 20px rgba(2,6,23,0.6), inset 0 -4px 10px rgba(0,0,0,0.5);
+    }
+    .info{
+      margin-top:12px;
+      display:flex;
+      gap:12px;
+      justify-content:center;
+      align-items:center;
+      color:var(--muted);
+      font-size:14px;
+      flex-wrap:wrap;
+    }
+    .controls{width:100%;text-align:center;color:var(--muted);font-size:13px}
+    /* Small responsive tweaks */
+    @media (max-width:640px){
+      canvas{width:92vw;height:92vw;max-width:600px;max-height:600px}
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Snake</h1>
+    <canvas id="game" width="600" height="600" aria-label="Snake game"></canvas>
+    <div class="info">
+      <div>Score: <span id="score">0</span></div>
+      <div>High Score: <span id="highscore">0</span></div>
+      <div class="controls">Controls: Arrow keys or WASD — Press Space to pause / restart after Game Over</div>
+    </div>
+    <p style="color:var(--muted);font-size:12px;margin-top:8px">
+      Tip: In VS Code install the "Live Server" extension and click "Go Live" (or open this file in your browser).
+    </p>
+  </div>
+
+  <script>
+  // All-in-one Snake game
+  // Open this file in VS Code and run with Live Server, or open in your browser.
+
+  (function () {
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const highscoreEl = document.getElementById('highscore');
+
+    // Configuration
+    const TILE_COUNT = 20;           // grid size
+    const CANVAS_SIZE = 600;         // canvas px (matches width/height attributes)
+    const TILE = CANVAS_SIZE / TILE_COUNT;
+    let TICK_MS = 100;               // ms per game tick (will scale with speed)
+
+    // Game state
+    let snake = [];
+    let dir = { x: 1, y: 0 };
+    let nextDir = { x: 1, y: 0 };
+    let food = null;
+    let score = 0;
+    let highscore = 0;
+    let running = false;
+    let gameInterval = null;
+    let paused = false;
+
+    function init() {
+      const saved = parseInt(localStorage.getItem('snake_highscore') || '0', 10);
+      highscore = Number.isFinite(saved) ? saved : 0;
+      highscoreEl.textContent = highscore;
+      resetGame();
+      attachListeners();
+      // initial draw first, then start the loop
+      draw();
+      start();
+    }
+
+    function resetGame() {
+      const startX = Math.floor(TILE_COUNT / 2);
+      const startY = Math.floor(TILE_COUNT / 2);
+      snake = [];
+      for (let i = 0; i < 4; i++) snake.push({ x: startX - i, y: startY });
+      dir = { x: 1, y: 0 };
+      nextDir = { x: 1, y: 0 };
+      placeFood();
+      score = 0;
+      scoreEl.textContent = score;
+      running = true;
+      paused = false;
+      clearOverlay();
+    }
+
+    function placeFood() {
+      // random free cell
+      if (!snake || snake.length === 0) {
+        food = { x: 0, y: 0 };
+        return;
+      }
+      while (true) {
+        const fx = Math.floor(Math.random() * TILE_COUNT);
+        const fy = Math.floor(Math.random() * TILE_COUNT);
+        if (!snake.some(s => s.x === fx && s.y === fy)) {
+          food = { x: fx, y: fy };
+          return;
+        }
+      }
+    }
+
+    function start() {
+      if (gameInterval) clearInterval(gameInterval);
+      gameInterval = setInterval(tick, TICK_MS);
+      running = true;
+      paused = false;
+    }
+
+    function stop() {
+      if (gameInterval) clearInterval(gameInterval);
+      gameInterval = null;
+      running = false;
+    }
+
+    function tick() {
+      if (!running || paused) return;
+
+      // apply buffered direction (no reverse unless length 1)
+      if ((nextDir.x !== -dir.x || nextDir.y !== -dir.y) || snake.length === 1) {
+        dir = nextDir;
+      }
+
+      const head = snake[0];
+      const newHead = { x: head.x + dir.x, y: head.y + dir.y };
+
+      // wall collision (no wrap)
+      if (newHead.x < 0 || newHead.x >= TILE_COUNT || newHead.y < 0 || newHead.y >= TILE_COUNT) {
+        return gameOver();
+      }
+
+      // self collision
+      if (snake.some(seg => seg.x === newHead.x && seg.y === newHead.y)) {
+        return gameOver();
+      }
+
+      snake.unshift(newHead);
+
+      // eat food?
+      if (food && newHead.x === food.x && newHead.y === food.y) {
+        score += 1;
+        scoreEl.textContent = score;
+        if (score > highscore) {
+          highscore = score;
+          localStorage.setItem('snake_highscore', String(highscore));
+          highscoreEl.textContent = highscore;
+        }
+        // optionally speed up every 5 points
+        if (score % 5 === 0 && TICK_MS > 35) {
+          TICK_MS = Math.max(35, TICK_MS - 8);
+          start(); // restart interval with new speed
+        }
+        placeFood();
+      } else {
+        snake.pop();
+      }
+
+      draw();
+    }
+
+    function gameOver() {
+      stop();
+      showOverlay('Game Over — Score: ' + score + '\\nPress Space to restart');
+      running = false;
+    }
+
+    // Drawing helpers
+    function draw() {
+      // clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#071229';
+      ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+      // faint grid
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= TILE_COUNT; i++) {
+        const pos = i * TILE;
+        ctx.beginPath();
+        ctx.moveTo(pos, 0);
+        ctx.lineTo(pos, CANVAS_SIZE);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, pos);
+        ctx.lineTo(CANVAS_SIZE, pos);
+        ctx.stroke();
+      }
+
+      // draw food
+      if (food) {
+        drawRect(food.x, food.y, '#ff5c5c');
+        drawRect(food.x + 0.15, food.y + 0.15, 'rgba(255,255,255,0.25)', 0.7);
+      }
+
+      // draw snake
+      for (let i = snake.length - 1; i >= 0; i--) {
+        const s = snake[i];
+        if (i === 0) drawRect(s.x, s.y, '#00c853');
+        else drawRect(s.x, s.y, '#28e07b');
+
+        ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(s.x * TILE + 0.5, s.y * TILE + 0.5, TILE - 1, TILE - 1);
+      }
+    }
+
+    function drawRect(gridX, gridY, color, alpha = 1) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = color;
+      ctx.fillRect(gridX * TILE + 1, gridY * TILE + 1, TILE - 2, TILE - 2);
+      ctx.restore();
+    }
+
+    // overlay
+    function showOverlay(text) {
+      const lines = String(text).split('\\n');
+      ctx.fillStyle = 'rgba(3,6,10,0.6)';
+      ctx.fillRect(40, CANVAS_SIZE / 2 - 60, CANVAS_SIZE - 80, 120);
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px Inter, system-ui, Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], CANVAS_SIZE / 2, CANVAS_SIZE / 2 - 10 + i * 26);
+      }
+    }
+
+    function clearOverlay() { draw(); }
+
+    // Input
+    function attachListeners() {
+      window.addEventListener('keydown', (e) => {
+        // allow restart with Space when not running or after game over
+        if (!running && e.code === 'Space') {
+          resetGame(); start(); return;
+        }
+
+        switch (e.code) {
+          case 'ArrowUp': case 'KeyW':    nextDir = { x: 0, y: -1 }; break;
+          case 'ArrowDown': case 'KeyS':  nextDir = { x: 0, y: 1 }; break;
+          case 'ArrowLeft': case 'KeyA':  nextDir = { x: -1, y: 0 }; break;
+          case 'ArrowRight': case 'KeyD': nextDir = { x: 1, y: 0 }; break;
+          case 'Space':
+            if (!running) { resetGame(); start(); }
+            else {
+              paused = !paused;
+              if (paused) showOverlay('Paused\\nPress Space to resume');
+              else clearOverlay();
+            }
+            break;
+        }
+
+        // prevent arrow/space scrolling
+        if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) {
+          e.preventDefault();
+        }
+      });
+
+      // restart on canvas click when game ended
+      canvas.addEventListener('click', () => {
+        if (!running) { resetGame(); start(); }
+      });
+
+      // touch controls: simple swipe detection
+      let touchStart = null;
+      canvas.addEventListener('touchstart', (ev) => {
+        const t = ev.changedTouches[0];
+        touchStart = { x: t.clientX, y: t.clientY };
+      }, {passive:true});
+      canvas.addEventListener('touchend', (ev) => {
+        if (!touchStart) return;
+        const t = ev.changedTouches[0];
+        const dx = t.clientX - touchStart.x;
+        const dy = t.clientY - touchStart.y;
+        const absX = Math.abs(dx), absY = Math.abs(dy);
+        if (Math.max(absX, absY) < 20) {
+          // tap -> restart if not running
+          if (!running) { resetGame(); start(); }
+        } else {
+          if (absX > absY) nextDir = { x: dx > 0 ? 1 : -1, y: 0 };
+          else nextDir = { x: 0, y: dy > 0 ? 1 : -1 };
+        }
+        touchStart = null;
+      }, {passive:true});
+    }
+
+    // start everything
+    init();
+  })();
+  </script>
+</body>
+</html>
